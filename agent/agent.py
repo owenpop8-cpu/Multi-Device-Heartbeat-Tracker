@@ -6,6 +6,10 @@ import sys
 import time
  
 import requests
+from dotenv import load_dotenv
+
+
+load_dotenv()
  
 PANEL_URL = os.environ.get("PANEL_URL", "").rstrip("/")
 PANEL_TOKEN = os.environ.get("PANEL_TOKEN", "")
