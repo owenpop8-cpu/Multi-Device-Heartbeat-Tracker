@@ -1,13 +1,16 @@
+
 import hashlib
 import os
 import secrets
 import sqlite3
 import time
 from contextlib import asynccontextmanager
- 
+
 from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic import BaseModel
+from dotenv import load_dotenv
 
+load_dotenv()
 
 DB_PATH = os.environ.get("DB_PATH", "panel.db")
 ADMIN_KEY = os.environ.get("ADMIN_KEY")
@@ -24,8 +27,8 @@ def init_db():
             id             INTEGER PRIMARY KEY AUTOINCREMENT,
             name           TEXT NOT NULL UNIQUE,
             token_hash     TEXT NOT NULL UNIQUE,
-            last_seen      REAL,            -- unix time of last heartbeat
-            pending_cmd    TEXT,            -- e.g. 'shutdown', or NULL
+            last_seen      REAL,
+            pending_cmd    TEXT,
             cmd_queued_at  REAL
         )
         """
@@ -40,7 +43,6 @@ def get_db():
     try:
         yield conn
         conn.commit()
-
     except Exception:
         conn.rollback()
         raise
@@ -56,8 +58,8 @@ async def lifespan(app: FastAPI):
     yield
 
 
-
 app = FastAPI(lifespan=lifespan)
+
 
 def hash_token(token: str):
     return hashlib.sha256(token.encode()).hexdigest()
@@ -69,34 +71,36 @@ def require_admin(x_admin_key: str = Header()):
 
 
 def get_machine_from_token(
-        authorization: str = Header(),
-        db: sqlite3.Connection = Depends(get_db),
+    authorization: str = Header(),
+    db: sqlite3.Connection = Depends(get_db),
 ) -> sqlite3.Row:
-
     scheme, _, token = authorization.partition(" ")
-    if scheme.lower() != 'bearer' or not token:
+    if scheme.lower() != "bearer" or not token:
         raise HTTPException(status_code=401, detail="Missing bearer token.")
+
     row = db.execute(
         "SELECT * FROM machines WHERE token_hash = ?", (hash_token(token),)
     ).fetchone()
+
     if row is None:
         raise HTTPException(status_code=401, detail="Unknown token.")
 
     return row
 
 
-
 class RegisterBody(BaseModel):
     name: str
+
 
 class CommandBody(BaseModel):
     command: str
 
 
-
-
 @app.post("/api/machines", dependencies=[Depends(require_admin)])
-def register_machine(body: RegisterBody, db: sqlite3.connection = Depends(get_db)):
+def register_machine(
+    body: RegisterBody,
+    db: sqlite3.Connection = Depends(get_db),
+):
     token = secrets.token_urlsafe(32)
     try:
         db.execute(
@@ -109,9 +113,6 @@ def register_machine(body: RegisterBody, db: sqlite3.connection = Depends(get_db
     return {"name": body.name, "token": token}
 
 
-
-
-
 @app.post("/api/heartbeat")
 def heartbeat(
     machine: sqlite3.Row = Depends(get_machine_from_token),
@@ -119,7 +120,6 @@ def heartbeat(
 ):
     now = time.time()
     command = machine["pending_cmd"]
-
 
     if command and now - machine["cmd_queued_at"] > COMMAND_TTL:
         command = None
@@ -132,28 +132,34 @@ def heartbeat(
     return {"command": command}
 
 
-
 @app.get("/api/machines", dependencies=[Depends(require_admin)])
 def list_machines(db: sqlite3.Connection = Depends(get_db)):
     now = time.time()
     rows = db.execute("SELECT * FROM machines ORDER BY name").fetchall()
+
     return [
         {
             "name": r["name"],
             "online": r["last_seen"] is not None and now - r["last_seen"] < ONLINE_WINDOW,
             "last_seen": r["last_seen"],
             "seconds_since_seen": None if r["last_seen"] is None else round(now - r["last_seen"]),
-            "pending_cmd": r["pending_cmd"]
+            "pending_cmd": r["pending_cmd"],
         }
         for r in rows
     ]
 
 
 @app.post("/api/machines/{name}/command", dependencies=[Depends(require_admin)])
-def queue_command(name: str, body: CommandBody, db: sqlite3.Connection = Depends(get_db)):
+def queue_command(
+    name: str,
+    body: CommandBody,
+    db: sqlite3.Connection = Depends(get_db),
+):
     if body.command not in ALLOWED_COMMANDS:
-        raise HTTPException(status_code=400, detail=f"Allowed commands: {sorted(ALLOWED_COMMANDS)}")
-
+        raise HTTPException(
+            status_code=400,
+            detail=f"Allowed commands: {sorted(ALLOWED_COMMANDS)}",
+        )
 
     cur = db.execute(
         "UPDATE machines SET pending_cmd = ?, cmd_queued_at = ? WHERE name = ?",
@@ -164,6 +170,3 @@ def queue_command(name: str, body: CommandBody, db: sqlite3.Connection = Depends
         raise HTTPException(status_code=404, detail="No such machine.")
 
     return {"queued": body.command, "machine": name}
-
-
-
